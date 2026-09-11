@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>📋 Registro de Asistencia</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; font-family: Arial, sans-serif; }
+    body { background: #f0f4f8; padding: 15px; }
+    .tarjeta { background: white; border-radius: 16px; padding: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); max-width: 420px; margin: 0 auto; }
+    h1 { text-align: center; color: #2c3e50; margin-bottom: 20px; font-size: 22px; }
+    h2 { color: #34495e; font-size: 16px; margin: 10px 0; }
+    .campo { margin-bottom: 15px; }
+    label { display: block; margin-bottom: 6px; font-weight: bold; color: #555; font-size: 14px; }
+    input { width: 100%; padding: 12px; border: 2px solid #ddd; border-radius: 10px; font-size: 16px; }
+    button { width: 100%; padding: 14px; border: none; border-radius: 10px; font-size: 16px; font-weight: bold; cursor: pointer; margin-top: 10px; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-entrada { background: #27ae60; color: white; }
+    .btn-salida { background: #e67e22; color: white; }
+    .btn-foto { background: #3498db; color: white; }
+    button:hover { opacity: 0.9; }
+    #vistaCamara, #fotoTomada { width: 100%; border-radius: 10px; background: #eee; margin: 10px 0; }
+    .mensaje { padding: 12px; border-radius: 10px; margin-top: 15px; display: none; }
+    .exito { background: #d4edda; color: #155724; display: block; }
+    .aviso { background: #fff3cd; color: #856404; display: block; }
+    .error { background: #f8d7da; color: #721c24; display: block; }
+    .presente { background: #e8f5e9; padding: 15px; border-radius: 10px; margin-bottom: 15px; border-left: 4px solid #27ae60; }
+    .coords { font-size: 12px; color: #666; margin-top: 5px; word-break: break-all; }
+    .oculto { display: none !important; }
+  </style>
+</head>
+<body>
+
+<div class="tarjeta">
+  <h1>📋 Registro de Asistencia</h1>
+
+  <!-- Si ya está registrado como presente -->
+  <div id="zonaPresente" class="presente oculto">
+    <h2>✅ ¡Ya estás registrado como presente!</h2>
+    <p id="nombrePresente"></p>
+    <p id="horaEntradaInfo" style="font-size:14px; color:#555"></p>
+    <button class="btn-salida" onclick="iniciarRegistro('salida')">🚪 Registrar Salida</button>
+  </div>
+
+  <!-- Formulario de entrada -->
+  <div id="zonaEntrada">
+    <div class="campo">
+      <label for="nombre">👤 Nombre Completo:</label>
+      <input type="text" id="nombre" placeholder="Escribe tu nombre completo...">
+    </div>
+    <button class="btn-entrada" onclick="iniciarRegistro('entrada')">📸 Registrar Entrada</button>
+  </div>
+
+  <!-- Cámara y Foto -->
+  <div id="zonaFoto" class="oculto">
+    <h2 id="tituloFoto">📸 Tómate una foto</h2>
+    <video id="vistaCamara" autoplay playsinline></video>
+    <button class="btn-foto" onclick="tomarFoto()">📸 CAPTURAR FOTO</button>
+    <canvas id="fotoTomada" class="oculto"></canvas>
+    <button id="btnConfirmar" class="btn-entrada oculto" onclick="confirmarRegistro()">✅ CONFIRMAR Y ENVIAR</button>
+    <button style="background:#95a5a6; color:white" onclick="cancelar()">❌ Cancelar</button>
+  </div>
+
+  <!-- Estado GPS -->
+  <div id="estadoGPS" class="coords oculto">
+    📍 Obteniendo ubicación...
+  </div>
+
+  <!-- Mensajes -->
+  <div id="mensaje" class="mensaje"></div>
+</div>
+
+<script>
+// 🔧 CONFIGURACIÓN — Cambia por las coordenadas de TU OFICINA
+const OFICINA_LAT = -5.181357;  // Latitud de tu oficina
+const OFICINA_LNG = -80.671454; // Longitud de tu oficina
+const RADIO_PERMITIDO_METROS = 200; // Distancia máxima permitida
+
+let estado = {
+  nombre: '',
+  tipo: '',
+  fotoBase64: '',
+  latitud: '',
+  longitud: '',
+  precision: '',
+  streamCamara: null
+};
+
+// Cargar estado al abrir
+window.onload = function() {
+  verificarSiPresente();
+};
+
+// Verificar si ya tiene entrada sin salida
+function verificarSiPresente() {
+  const guardado = localStorage.getItem('presente');
+  if (guardado) {
+    const datos = JSON.parse(guardado);
+    estado.nombre = datos.nombre;
+    document.getElementById('zonaEntrada').classList.add('oculto');
+    document.getElementById('zonaPresente').classList.remove('oculto');
+    document.getElementById('nombrePresente').textContent = '👤 ' + datos.nombre;
+    document.getElementById('horaEntradaInfo').textContent = '🕒 Entrada: ' + datos.hora;
+  }
+}
+
+// Iniciar registro (entrada o salida)
+function iniciarRegistro(tipo) {
+  if (tipo === 'entrada') {
+    estado.nombre = document.getElementById('nombre').value.trim();
+    if (!estado.nombre) { mostrarMensaje('Escribe tu nombre completo', 'aviso'); return; }
+  }
+  estado.tipo = tipo;
+  document.getElementById('zonaEntrada').classList.add('oculto');
+  document.getElementById('zonaPresente').classList.add('oculto');
+  document.getElementById('zonaFoto').classList.remove('oculto');
+  document.getElementById('tituloFoto').textContent = tipo === 'entrada' ? '📸 Tómate foto de ENTRADA' : '📸 Tómate foto de SALIDA';
+  activarCamara();
+}
+
+// Activar cámara frontal
+async function activarCamara() {
+  try {
+    estado.streamCamara = await navigator.mediaDevices.getUserMedia({ 
+      video: { 
+        facingMode: 'user',
+        width: { ideal: 300 },
+        height: { ideal: 300 }
+      },
+      audio: false
+    });
+    document.getElementById('vistaCamara').srcObject = estado.streamCamara;
+    console.log('✅ Cámara activada correctamente');
+  } catch (e) {
+    console.error('Error cámara:', e);
+    // Intenta sin especificar resolución
+    try {
+      estado.streamCamara = await navigator.mediaDevices.getUserMedia({ 
+        video: { facingMode: 'user' },
+        audio: false
+      });
+      document.getElementById('vistaCamara').srcObject = estado.streamCamara;
+    } catch (e2) {
+      mostrarMensaje('❌ No se puede acceder a la cámara. Abre la URL en Google Chrome y acepta los permisos.', 'error');
+    }
+  }
+}
+
+// Tomar foto
+function tomarFoto() {
+  const video = document.getElementById('vistaCamara');
+  const canvas = document.getElementById('fotoTomada');
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(video, 0, 0);
+  
+  // Convertir a Base64
+  estado.fotoBase64 = canvas.toDataURL('image/jpeg', 0.7);
+  
+  // Mostrar foto tomada
+  video.classList.add('oculto');
+  canvas.classList.remove('oculto');
+  document.getElementById('btnConfirmar').classList.remove('oculto');
+  
+  // Detener cámara
+  if (estado.streamCamara) {
+    estado.streamCamara.getTracks().forEach(t => t.stop());
+  }
+}
+
+// Confirmar y obtener GPS + Guardar
+async function confirmarRegistro() {
+  mostrarMensaje('📍 Obteniendo ubicación GPS...', 'aviso');
+  
+  try {
+    // Obtener ubicación
+    const posicion = await new Promise((res, rej) => {
+      navigator.geolocation.getCurrentPosition(res, rej, { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
+    });
+    
+    estado.latitud = posicion.coords.latitude;
+    estado.longitud = posicion.coords.longitude;
+    estado.precision = Math.round(posicion.coords.accuracy);
+    
+    // Verificar distancia a oficina
+    const distancia = calcularDistancia(
+      OFICINA_LAT, OFICINA_LNG,
+      estado.latitud, estado.longitud
+    );
+    
+    let advertenciaUbicacion = '';
+    if (distancia > RADIO_PERMITIDO_METROS) {
+      advertenciaUbicacion = `⚠️ FUERA DE OFICINA (a ${Math.round(distancia)} m)`;
+      if (!confirm(`${advertenciaUbicacion}\n¿Deseas guardar de todos modos?`)) return;
+    }
+    
+    // Enviar a Google Sheets
+    const resultado = await enviarAGoogleSheets();
+    
+    if (resultado.exito) {
+      // Si es entrada → guardar como presente
+      if (estado.tipo === 'entrada') {
+        localStorage.setItem('presente', JSON.stringify({
+          nombre: estado.nombre,
+          hora: new Date().toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' })
+        }));
+      } else {
+        // Si es salida → borrar estado presente
+        localStorage.removeItem('presente');
+      }
+      
+      mostrarMensaje(`✅ ¡REGISTRO EXITOSO!\n📍 Distancia a oficina: ${Math.round(distancia)} m\n${advertenciaUbicacion}`, 'exito');
+      setTimeout(() => location.reload(), 3000);
+    } else {
+      mostrarMensaje('❌ Error: ' + resultado.mensaje, 'error');
+    }
+    
+  } catch (error) {
+    mostrarMensaje('❌ No se pudo obtener ubicación. Activa el GPS e intenta de nuevo.', 'error');
+  }
+}
+
+// Calcular distancia en metros (Fórmula Haversine)
+function calcularDistancia(lat1, lng1, lat2, lng2) {
+  const R = 6371000;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLng/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+// Enviar datos a Google Apps Script
+async function enviarAGoogleSheets() {
+  try {
+    // 👉 AQUÍ PEGAS LA URL DE TU APLICACIÓN WEB DE GOOGLE APPS SCRIPT
+    const URL_GOOGLE = "https://script.google.com/macros/s/AKfycbz8w8xpavXAwnXUtR2y629PsZPxXm2QzPXA4vJh1yFzOeS97XAeMYIieDeIjQijizRK/exec";
+
+    const respuesta = await fetch(URL_GOOGLE, {
+      method: "POST",
+      mode: "no-cors",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        nombre: estado.nombre,
+        tipo: estado.tipo,
+        fotoBase64: estado.fotoBase64,
+        latitud: estado.latitud,
+        longitud: estado.longitud,
+        precision: estado.precision
+      })
+    });
+
+    return { exito: true, mensaje: "✅ Guardado correctamente" };
+  } catch (error) {
+    console.error(error);
+    return { exito: false, mensaje: error.toString() };
+  }
+}
+
+// Cancelar operación
+function cancelar() {
+  if (estado.streamCamara) estado.streamCamara.getTracks().forEach(t => t.stop());
+  location.reload();
+}
+
+// Mostrar mensajes
+function mostrarMensaje(texto, tipo) {
+  const m = document.getElementById('mensaje');
+  m.textContent = texto;
+  m.className = 'mensaje ' + tipo;
+}
+</script>
+</body>
+</html>
